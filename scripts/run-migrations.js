@@ -13,6 +13,11 @@ function hashContent(content) {
     return crypto.createHash('sha256').update(content.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
 }
 
+function hashContentLegacy(content) {
+    // Backward compatibility for checksums created before line-ending normalization.
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 async function ensureMigrationsTable(pool) {
     await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -47,14 +52,28 @@ async function run() {
         const filePath = path.join(migrationsDir, fileName);
         const sql = await fs.readFile(filePath, 'utf8');
         const checksum = hashContent(sql);
+        const legacyChecksum = hashContentLegacy(sql);
 
         if (applied.has(fileName)) {
             const existingChecksum = applied.get(fileName);
-            if (existingChecksum !== checksum) {
-                throw new Error(`Checksum mismatch for already applied migration: ${fileName}`);
+            if (existingChecksum === checksum) {
+                console.log(`Skipping ${fileName} (already applied)`);
+                continue;
             }
-            console.log(`Skipping ${fileName} (already applied)`);
-            continue;
+
+            if (existingChecksum === legacyChecksum) {
+                // Automatically upgrade legacy checksum format to normalized format.
+                await pool.query('UPDATE schema_migrations SET checksum = $2 WHERE file_name = $1', [fileName, checksum]);
+                console.log(`Skipping ${fileName} (already applied, checksum format upgraded)`);
+                continue;
+            }
+
+            if (existingChecksum !== checksum) {
+                throw new Error(
+                    `Checksum mismatch for already applied migration: ${fileName}. `
+                    + `stored=${existingChecksum}, normalized=${checksum}, legacyRaw=${legacyChecksum}`,
+                );
+            }
         }
 
         const client = await pool.connect();
