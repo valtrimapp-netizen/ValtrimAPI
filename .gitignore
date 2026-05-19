@@ -5,3 +5,7 @@ output
 coverage
 npm-debug.log*
 .DS_Store
+
+# OAuth secrets
+docs/client_secret_*.json
+

@@ -1,27 +1,15 @@
-import { sendJson } from '../utils/http.js';
-import { corsHeaders } from '../middlewares/cors.js';
+import { checkDatabaseConnection } from '../config/database.js';
 
 export function getRoot(_req, res) {
-  sendJson(
-    res,
-    200,
-    {
-      name: 'Valtrim API',
-      status: 'ok',
-    },
-    corsHeaders()
-  );
+  res.json({ name: 'Valtrim API', status: 'ok' });
 }
 
-export function getHealth(_req, res) {
-  sendJson(
-    res,
-    200,
-    {
-      ok: true,
-      service: 'valtrim-api',
-      timestamp: new Date().toISOString(),
-    },
-    corsHeaders()
-  );
+export async function getHealth(_req, res) {
+  const database = await checkDatabaseConnection();
+  res.json({
+    ok: true,
+    service: 'valtrim-api',
+    timestamp: new Date().toISOString(),
+    database,
+  });
 }

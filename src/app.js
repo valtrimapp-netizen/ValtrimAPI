@@ -1,27 +1,40 @@
-import { handleCors, corsHeaders } from './middlewares/cors.js';
-import { sendError } from './middlewares/errorHandler.js';
-import { matchRoute } from './routes/index.js';
-import { notFound } from './utils/http.js';
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import { env } from './config/env.js';
+import { createRouter } from './routes/index.js';
+import { expressErrorHandler } from './middlewares/errorHandler.js';
+import { httpStatusCode } from './utils/errors.js';
 
-export async function requestHandler(req, res) {
-  if (!req.url) {
-    sendError(res, new Error('Invalid request'), 400);
-    return;
-  }
+const app = express();
 
-  if (handleCors(req, res)) {
-    return;
-  }
+// Security headers
+app.use(helmet());
 
-  const route = matchRoute(req);
-  if (!route) {
-    notFound(req, res, corsHeaders());
-    return;
-  }
+// CORS
+app.use(
+  cors({
+    origin: env.corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 
-  try {
-    await route.handler(req, res);
-  } catch (error) {
-    sendError(res, error);
-  }
-}
+// Body parsing (1 MB limit)
+app.use(express.json({ limit: '1mb' }));
+
+// Routes
+app.use(createRouter());
+
+// 404 — no route matched
+app.use((req, res) => {
+  const status = 404;
+  res.status(status).json({
+    error: { status, code: httpStatusCode(status), message: `Cannot ${req.method} ${req.path}` },
+  });
+});
+
+// Global error handler (must be last and have exactly 4 params)
+app.use(expressErrorHandler);
+
+export { app };
