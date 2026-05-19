@@ -18,6 +18,11 @@ function hashContentLegacy(content) {
     return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+function hashContentAsCrlf(content) {
+    // Compatibility with files hashed when checked out with CRLF.
+    return crypto.createHash('sha256').update(content.replace(/\r?\n/g, '\r\n'), 'utf8').digest('hex');
+}
+
 async function ensureMigrationsTable(pool) {
     await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -53,6 +58,7 @@ async function run() {
         const sql = await fs.readFile(filePath, 'utf8');
         const checksum = hashContent(sql);
         const legacyChecksum = hashContentLegacy(sql);
+        const crlfChecksum = hashContentAsCrlf(sql);
 
         if (applied.has(fileName)) {
             const existingChecksum = applied.get(fileName);
@@ -61,7 +67,7 @@ async function run() {
                 continue;
             }
 
-            if (existingChecksum === legacyChecksum) {
+            if (existingChecksum === legacyChecksum || existingChecksum === crlfChecksum) {
                 // Automatically upgrade legacy checksum format to normalized format.
                 await pool.query('UPDATE schema_migrations SET checksum = $2 WHERE file_name = $1', [fileName, checksum]);
                 console.log(`Skipping ${fileName} (already applied, checksum format upgraded)`);
@@ -71,7 +77,7 @@ async function run() {
             if (existingChecksum !== checksum) {
                 throw new Error(
                     `Checksum mismatch for already applied migration: ${fileName}. `
-                    + `stored=${existingChecksum}, normalized=${checksum}, legacyRaw=${legacyChecksum}`,
+                    + `stored=${existingChecksum}, normalized=${checksum}, legacyRaw=${legacyChecksum}, crlfRaw=${crlfChecksum}`,
                 );
             }
         }
