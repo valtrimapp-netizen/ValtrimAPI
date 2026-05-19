@@ -9,7 +9,8 @@ const __dirname = path.dirname(__filename);
 const migrationsDir = path.resolve(__dirname, '..', 'db', 'migrations');
 
 function hashContent(content) {
-    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+    // Normalize line endings to LF so Windows CRLF never causes a mismatch.
+    return crypto.createHash('sha256').update(content.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
 }
 
 async function ensureMigrationsTable(pool) {
