@@ -1,5 +1,6 @@
 import {
     changePassword,
+    createPassword,
     forgotPassword,
     login,
     loginGoogle,
@@ -66,6 +67,12 @@ export const authRoutes = [
         path: '/api/auth/me/password',
         auth: { required: true, permissionsAll: ['auth.self.update'] },
         handler: changePassword,
+    },
+    {
+        method: 'POST',
+        path: '/api/auth/me/password/create',
+        auth: { required: true, permissionsAll: ['auth.self.update'] },
+        handler: createPassword,
     },
     {
         method: 'POST',

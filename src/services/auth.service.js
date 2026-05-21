@@ -102,6 +102,21 @@ async function getUserPermissions(clientOrPool, userId) {
     return permissionsResult.rows.map((row) => row.code);
 }
 
+async function hasLocalPasswordIdentity(clientOrPool, userId) {
+    const result = await clientOrPool.query(
+        `
+            SELECT 1
+            FROM sec_auth_identities
+            WHERE user_id = $1
+                AND provider = 'local'
+                AND password_hash IS NOT NULL
+            LIMIT 1
+        `,
+        [userId]
+    );
+    return result.rowCount > 0;
+}
+
 async function getRoleIdByCode(client, code) {
     const result = await client.query('SELECT id FROM cat_roles WHERE code = $1', [code]);
     if (result.rowCount < 1) {
@@ -163,6 +178,7 @@ async function createSessionAndRefreshToken(client, { userId, deviceName, ipAddr
 async function createAuthResponse(client, { userId, email, fullName, deviceName, ipAddress, userAgent }) {
     const roles = await getUserRoles(client, userId);
     const permissions = await getUserPermissions(client, userId);
+    const hasLocalPassword = await hasLocalPasswordIdentity(client, userId);
 
     const session = await createSessionAndRefreshToken(client, {
         userId,
@@ -187,6 +203,7 @@ async function createAuthResponse(client, { userId, email, fullName, deviceName,
             fullName,
             roles,
             permissions,
+            hasLocalPassword,
         },
         accessToken,
         accessTokenExpiresAt: accessTokenExpiresAt(),
@@ -303,17 +320,10 @@ export async function loginWithLocalAuth({ email, password, deviceName, ipAddres
 
         const userResult = await client.query(
             `
-        SELECT
-          u.id,
-          u.email,
-          u.full_name,
-          u.is_active,
-          ai.password_hash
-        FROM core_users u
-        INNER JOIN sec_auth_identities ai
-          ON ai.user_id = u.id
-         AND ai.provider = 'local'
-        WHERE u.email = $1
+        SELECT id, email, full_name, is_active
+        FROM core_users
+        WHERE email = $1
+        LIMIT 1
       `,
             [email]
         );
@@ -327,7 +337,27 @@ export async function loginWithLocalAuth({ email, password, deviceName, ipAddres
             throw new HttpError('User is inactive', 403);
         }
 
-        const matches = await bcrypt.compare(password, user.password_hash);
+        const localIdentityResult = await client.query(
+            `
+        SELECT
+          ai.password_hash
+        FROM sec_auth_identities ai
+        WHERE ai.user_id = $1
+          AND ai.provider = 'local'
+        LIMIT 1
+      `,
+            [user.id]
+        );
+
+        if (localIdentityResult.rowCount < 1 || !localIdentityResult.rows[0].password_hash) {
+            throw new HttpError(
+                'Esta cuenta usa Google. Inicia sesión con Google y crea una contraseña en tu perfil para habilitar el acceso con correo y contraseña.',
+                400,
+                'LOCAL_PASSWORD_NOT_CONFIGURED'
+            );
+        }
+
+        const matches = await bcrypt.compare(password, localIdentityResult.rows[0].password_hash);
         if (!matches) {
             throw new HttpError('Invalid credentials', 401);
         }
@@ -591,6 +621,7 @@ export async function refreshSessionTokens({ refreshToken, ipAddress, userAgent 
 
         const roles = await getUserRoles(client, tokenRow.user_id);
         const permissions = await getUserPermissions(client, tokenRow.user_id);
+        const hasLocalPassword = await hasLocalPasswordIdentity(client, tokenRow.user_id);
         const accessToken = signAccessToken({
             userId: tokenRow.user_id,
             sessionId: tokenRow.session_id,
@@ -615,6 +646,7 @@ export async function refreshSessionTokens({ refreshToken, ipAddress, userAgent 
                 fullName: tokenRow.full_name,
                 roles,
                 permissions,
+                hasLocalPassword,
             },
             accessToken,
             accessTokenExpiresAt: accessTokenExpiresAt(),
@@ -732,6 +764,7 @@ export async function authenticateAccessToken(authorizationHeader) {
 
     const dbRoles = await getUserRoles(getDbPool(), userId);
     const dbPermissions = await getUserPermissions(getDbPool(), userId);
+    const hasLocalPassword = await hasLocalPasswordIdentity(getDbPool(), userId);
     return {
         userId,
         sessionId,
@@ -739,6 +772,7 @@ export async function authenticateAccessToken(authorizationHeader) {
         fullName: session.full_name,
         roles: dbRoles.length > 0 ? dbRoles : tokenRoles,
         permissions: dbPermissions.length > 0 ? dbPermissions : tokenPermissions,
+        hasLocalPassword,
         token,
     };
 }
@@ -1088,6 +1122,7 @@ export async function updateUserProfile({ userId, fullName, ipAddress = null, us
 
         const roles = await getUserRoles(pool, user.id);
         const permissions = await getUserPermissions(pool, user.id);
+        const hasLocalPassword = await hasLocalPasswordIdentity(pool, user.id);
 
         return {
             user: {
@@ -1096,6 +1131,7 @@ export async function updateUserProfile({ userId, fullName, ipAddress = null, us
                 fullName: user.full_name,
                 roles,
                 permissions,
+                hasLocalPassword,
             },
         };
     } catch (error) {
@@ -1147,6 +1183,60 @@ export async function changeUserPassword({ userId, currentPassword, newPassword,
         await client.query('COMMIT');
 
         return { ok: true };
+    } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export async function createLocalPasswordForUser({ userId, newPassword, ipAddress = null, userAgent = null }) {
+    const pool = getDbPool();
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const userResult = await client.query('SELECT is_active FROM core_users WHERE id = $1 FOR UPDATE', [userId]);
+        if (userResult.rowCount < 1) {
+            throw new HttpError('User not found', 404);
+        }
+        if (!userResult.rows[0].is_active) {
+            throw new HttpError('User is inactive', 403);
+        }
+
+        const localIdentityResult = await client.query(
+            `SELECT id, password_hash FROM sec_auth_identities WHERE user_id = $1 AND provider = 'local' FOR UPDATE`,
+            [userId]
+        );
+
+        if (localIdentityResult.rowCount > 0 && localIdentityResult.rows[0].password_hash) {
+            throw new HttpError('Local password is already configured for this account', 400);
+        }
+
+        const passwordHash = await bcrypt.hash(newPassword, 12);
+
+        if (localIdentityResult.rowCount > 0) {
+            await client.query(
+                `UPDATE sec_auth_identities SET password_hash = $2, updated_at = NOW() WHERE id = $1`,
+                [localIdentityResult.rows[0].id, passwordHash]
+            );
+        } else {
+            await client.query(
+                `INSERT INTO sec_auth_identities (user_id, provider, password_hash, is_primary) VALUES ($1, 'local', $2, FALSE)`,
+                [userId, passwordHash]
+            );
+        }
+
+        await client.query(
+            `INSERT INTO evt_audit_log (actor_user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'auth.password.create_local', 'core_users', $2, $3::inet, $4)`,
+            [userId, userId, ipAddress, userAgent]
+        );
+
+        await client.query('COMMIT');
+
+        return { ok: true, hasLocalPassword: true };
     } catch (error) {
         try { await client.query('ROLLBACK'); } catch { /* ignore */ }
         throw error;

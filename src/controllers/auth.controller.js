@@ -1,5 +1,6 @@
 import { UnprocessableEntityError } from '../utils/errors.js';
 import {
+    createLocalPasswordForUser,
     changeUserPassword,
     getRequestDeviceContext,
     loginWithGoogleAuth,
@@ -14,6 +15,7 @@ import {
     verifyPasswordResetOtp,
 } from '../services/auth.service.js';
 import {
+    validateCreatePasswordPayload,
     validateChangePasswordPayload,
     validateForgotPasswordPayload,
     validateGoogleLoginPayload,
@@ -81,6 +83,7 @@ export async function me(req, res) {
             fullName: req.auth.fullName,
             roles: req.auth.roles,
             permissions: req.auth.permissions,
+            hasLocalPassword: req.auth.hasLocalPassword,
         },
         session: {
             id: req.auth.sessionId,
@@ -125,6 +128,23 @@ export async function changePassword(req, res) {
     const result = await changeUserPassword({
         userId: req.auth.userId,
         currentPassword: validation.value.currentPassword,
+        newPassword: validation.value.newPassword,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+    });
+    res.json(result);
+}
+
+export async function createPassword(req, res) {
+    const body = req.body ?? {};
+    const validation = validateCreatePasswordPayload(body);
+    if (!validation.ok) {
+        throw new UnprocessableEntityError('Invalid auth request', validation.errors);
+    }
+
+    const context = getRequestDeviceContext(req, null);
+    const result = await createLocalPasswordForUser({
+        userId: req.auth.userId,
         newPassword: validation.value.newPassword,
         ipAddress: context.ipAddress,
         userAgent: context.userAgent,

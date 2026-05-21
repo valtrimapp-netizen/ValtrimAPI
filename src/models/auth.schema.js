@@ -156,6 +156,19 @@ export function validateChangePasswordPayload(payload) {
     };
 }
 
+export function validateCreatePasswordPayload(payload) {
+    const newPassword = normalizePassword(payload?.newPassword);
+    const errors = [];
+    if (!newPassword || newPassword.length < 8 || newPassword.length > 128) {
+        errors.push('newPassword must contain between 8 and 128 characters');
+    }
+    return {
+        ok: errors.length === 0,
+        errors,
+        value: { newPassword },
+    };
+}
+
 export function validateResetPasswordPayload(payload) {
     const email = normalizeEmail(payload?.email);
     const code = normalizeOtpCode(payload?.code);
