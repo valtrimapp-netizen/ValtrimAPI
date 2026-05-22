@@ -3,10 +3,12 @@ import { requireAuth } from '../middlewares/auth.js';
 import { extractionRoutes } from './extraction.routes.js';
 import { authRoutes } from './auth.routes.js';
 import { healthRoutes } from './health.routes.js';
+import { userAdminRoutes } from './userAdmin.routes.js';
 
 export const routes = [
   ...healthRoutes,
   ...authRoutes,
+  ...userAdminRoutes,
   ...extractionRoutes,
 ];
 
