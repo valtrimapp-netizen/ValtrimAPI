@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Force SQL migrations to always use LF — prevents checksum drift between Windows dev and Linux CI/prod
+*.sql text eol=lf
+*.sh text eol=lf
